@@ -35,12 +35,12 @@
 #include <linux/syscalls.h>
 #include <linux/hrtimer.h>
 #include <linux/ion.h>
-DEFINE_MUTEX(ctrl_cmd_lock);
 
-#ifdef CONFIG_PANTECH_CAMERA
-#define F_PANTECH_CAMERA_FIX_MSM_CTRL_TIMEOUT
-#define F_PANTECH_CAMERA_FIX_MSM_OPEN_FAIL
+#if (defined(CONFIG_TARGET_SERIES_P5LTE) || defined(CONFIG_TARGET_SERIES_P8LTE))
+#include "sec_cam_pmic.h"
 #endif
+
+DEFINE_MUTEX(ctrl_cmd_lock);
 
 #define CAMERA_STOP_VIDEO 58
 spinlock_t pp_prev_spinlock;
@@ -650,11 +650,13 @@ static int __msm_pmem_table_del(struct msm_sync *sync,
 					pinfo->vaddr == region->info.vaddr &&
 					pinfo->fd == region->info.fd) {
 				hlist_del(node);
+				spin_unlock_irqrestore(&sync->pmem_frame_spinlock, flags); //spinlock_test
 #ifdef CONFIG_MSM_MULTIMEDIA_USE_ION
 				ion_free(client_for_ion, region->handle);
 #else
 				put_pmem_file(region->file);
 #endif
+				spin_lock_irqsave(&sync->pmem_frame_spinlock, flags); //spinlock_test
 				kfree(region);
 				CDBG("%s: type %d, vaddr  0x%p\n",
 					__func__, pinfo->type, pinfo->vaddr);
@@ -674,11 +676,13 @@ static int __msm_pmem_table_del(struct msm_sync *sync,
 				pinfo->vaddr == region->info.vaddr &&
 				pinfo->fd == region->info.fd) {
 				hlist_del(node);
+				spin_unlock_irqrestore(&sync->pmem_frame_spinlock, flags);  //spinlock_test
 #ifdef CONFIG_MSM_MULTIMEDIA_USE_ION
 				ion_free(client_for_ion, region->handle);
 #else
 				put_pmem_file(region->file);
 #endif
+				spin_lock_irqsave(&sync->pmem_frame_spinlock, flags);//spinlock_test
 				kfree(region);
 				CDBG("%s: type %d, vaddr  0x%p\n",
 					__func__, pinfo->type, pinfo->vaddr);
@@ -697,11 +701,13 @@ static int __msm_pmem_table_del(struct msm_sync *sync,
 					pinfo->vaddr == region->info.vaddr &&
 					pinfo->fd == region->info.fd) {
 				hlist_del(node);
+				spin_unlock_irqrestore(&sync->pmem_stats_spinlock, flags); //spinlock_test
 #ifdef CONFIG_MSM_MULTIMEDIA_USE_ION
 				ion_free(client_for_ion, region->handle);
 #else
 				put_pmem_file(region->file);
 #endif
+				spin_lock_irqsave(&sync->pmem_stats_spinlock, flags); //spinlock_test
 				kfree(region);
 				CDBG("%s: type %d, vaddr  0x%p\n",
 					__func__, pinfo->type, pinfo->vaddr);
@@ -783,13 +789,6 @@ static int __msm_get_frame(struct msm_sync *sync,
 	frame->fd = pmem_info.fd;
 	frame->path = vdata->phy.output_id;
 	frame->frame_id = vdata->phy.frame_id;
-
-#ifdef CONFIG_PANTECH_CAMERA//IRQ
-	if (sync->sctrl.s_readirq) {
-		frame->irq_stat = sync->sctrl.s_readirq();
-	}
-#endif
-
 	CDBG("%s: plane0 %x, plane1 %x, plane2 %x,qcmd %x, virt_addr %x\n",
 		__func__, pphy->p0_phy, pphy->p1_phy, pphy->p2_phy,
 		(int) qcmd, (int) frame->buffer);
@@ -1036,15 +1035,9 @@ static int msm_control(struct msm_control_device *ctrl_pmsm,
 		goto end;
 	}
 	msm_queue_drain(&ctrl_pmsm->ctrl_q, list_control);
-#ifdef F_PANTECH_CAMERA_FIX_MSM_CTRL_TIMEOUT
-	if (udata->timeout_ms > 0)
-		qcmd_resp = __msm_control(sync, &ctrl_pmsm->ctrl_q, qcmd,
-					msecs_to_jiffies(udata->timeout_ms));
-	else
-#endif
 	qcmd_resp = __msm_control(sync,
 				  &ctrl_pmsm->ctrl_q,
-				  qcmd, msecs_to_jiffies(10000));
+				  qcmd, msecs_to_jiffies(4000)); // 10000-> 4000 reduce waiting time
 
 	/* ownership of qcmd will be transfered to event queue */
 	qcmd = NULL;
@@ -2015,8 +2008,8 @@ static int msm_get_sensor_info(struct msm_sync *sync, void __user *arg)
 	memcpy(&info.name[0],
 		sdata->sensor_name,
 		MAX_SENSOR_NAME);
-	info.flash_enabled = sdata->flash_data->flash_type !=
-		MSM_CAMERA_FLASH_NONE;
+	info.flash_enabled = MSM_CAMERA_FLASH_NONE; //sdata->flash_data->flash_type !=
+		//MSM_CAMERA_FLASH_NONE;
 
 	/* copy back to user space */
 	if (copy_to_user((void *)arg,
@@ -3039,6 +3032,9 @@ static long msm_ioctl_control(struct file *filep, unsigned int cmd,
 	case MSM_CAM_IOCTL_GET_CAMERA_INFO:
 		rc = msm_get_camera_info(argp);
 		break;
+	case MSM_CAM_IOCTL_EXT_CONFIG:
+	        rc = pmsm->sync->sctrl.s_ext_config(argp);
+		break;
 	default:
 		rc = msm_ioctl_common(pmsm, cmd, argp);
 		break;
@@ -3068,6 +3064,9 @@ static int __msm_release(struct msm_sync *sync)
 			sync->sctrl.s_release();
 			CDBG("%s, msm_camio_sensor_clk_off\n", __func__);
 			msm_camio_sensor_clk_off(sync->pdev);
+#if (defined(CONFIG_TARGET_SERIES_P5LTE) || defined(CONFIG_TARGET_SERIES_P8LTE))
+			cam_ldo_power_off();
+#endif
 			if (sync->sfctrl.strobe_flash_release) {
 				CDBG("%s, strobe_flash_release\n", __func__);
 				sync->sfctrl.strobe_flash_release(
@@ -3103,9 +3102,6 @@ static int __msm_release(struct msm_sync *sync)
 		msm_queue_drain(&sync->event_q, list_config);
 
 		wake_unlock(&sync->wake_lock);
-#ifdef CONFIG_PANTECH_CAMERA_SUSPEND_LOCK
-		wake_unlock(&sync->suspend_lock);
-#endif
 		sync->apps_id = NULL;
 		sync->core_powered_on = 0;
 	}
@@ -3146,12 +3142,6 @@ static int msm_release_control(struct inode *node, struct file *filep)
 		msm_queue_drain(&ctrl_pmsm->ctrl_q, list_control);
 		kfree(ctrl_pmsm);
 	}
-#ifdef F_PANTECH_CAMERA_FIX_MSM_OPEN_FAIL
-	if (!rc) {
-		msm_queue_drain(&pmsm->sync->event_q, list_config);
-		atomic_set(&pmsm->opened, 0);
-	}
-#endif
 	return rc;
 }
 
@@ -3772,14 +3762,17 @@ static int __msm_open(struct msm_cam_device *pmsm, const char *const apps_id,
 
 	if (!sync->core_powered_on && !is_controlnode) {
 		wake_lock(&sync->wake_lock);
-#ifdef CONFIG_PANTECH_CAMERA_SUSPEND_LOCK
-		wake_lock(&sync->suspend_lock);
-#endif
 
 		msm_camvfe_fn_init(&sync->vfefn, sync);
 		if (sync->vfefn.vfe_init) {
 			sync->pp_frame_avail = 0;
 			sync->get_pic_abort = 0;
+
+#if (defined(CONFIG_TARGET_SERIES_P5LTE) || defined(CONFIG_TARGET_SERIES_P8LTE))
+			// have to enable CAM LDOs before MCLK
+			cam_ldo_power_on(sync->sdata->sensor_name);
+#endif
+
 			rc = msm_camio_sensor_clk_on(sync->pdev);
 			if (rc < 0) {
 				pr_err("%s: setting sensor clocks failed: %d\n",
@@ -3858,20 +3851,8 @@ static int msm_open_common(struct inode *inode, struct file *filep,
 	}
 
 	rc = __msm_open(pmsm, MSM_APPS_ID_PROP, is_controlnode);
-#ifdef F_PANTECH_CAMERA_FIX_MSM_OPEN_FAIL
-	if (rc < 0) {
-		if (is_controlnode) {
-			return rc;
-		} else {
-			filep->private_data = pmsm;
-			msm_release_config(inode, filep);
-			return rc;
-		}
-	}
-#else
 	if (rc < 0)
 		return rc;
-#endif
 	filep->private_data = pmsm;
 	CDBG("%s: rc %d\n", __func__, rc);
 	return rc;
@@ -4001,17 +3982,10 @@ static int msm_sync_init(struct msm_sync *sync,
 	msm_queue_init(&sync->vpe_q, "vpe");
 
 	wake_lock_init(&sync->wake_lock, WAKE_LOCK_IDLE, "msm_camera");
-#ifdef CONFIG_PANTECH_CAMERA_SUSPEND_LOCK
-	wake_lock_init(&sync->suspend_lock, WAKE_LOCK_SUSPEND,
-			"msm_camera_suspend");
-#endif
 
 	rc = msm_camio_probe_on(pdev);
 	if (rc < 0) {
 		wake_lock_destroy(&sync->wake_lock);
-#ifdef CONFIG_PANTECH_CAMERA_SUSPEND_LOCK
-		wake_lock_destroy(&sync->suspend_lock);
-#endif
 		return rc;
 	}
 	rc = sensor_probe(sync->sdata, &sctrl);
@@ -4025,9 +3999,6 @@ static int msm_sync_init(struct msm_sync *sync,
 			__func__,
 			sync->sdata->sensor_name);
 		wake_lock_destroy(&sync->wake_lock);
-#ifdef CONFIG_PANTECH_CAMERA_SUSPEND_LOCK
-		wake_lock_destroy(&sync->suspend_lock);
-#endif
 		return rc;
 	}
 
@@ -4047,9 +4018,6 @@ static int msm_sync_init(struct msm_sync *sync,
 static int msm_sync_destroy(struct msm_sync *sync)
 {
 	wake_lock_destroy(&sync->wake_lock);
-#ifdef CONFIG_PANTECH_CAMERA_SUSPEND_LOCK
-	wake_lock_destroy(&sync->suspend_lock);
-#endif
 	return 0;
 }
 
@@ -4151,12 +4119,17 @@ int msm_camera_drv_start(struct platform_device *dev,
 
 	pmsm = kzalloc(sizeof(struct msm_cam_device) * 4 +
 			sizeof(struct msm_sync), GFP_ATOMIC);
-	if (!pmsm)
+	if (!pmsm) {
+		printk(KERN_ERR "%s: create class failed.\n", __func__);	//request SM
+		class_destroy(msm_class);
 		return -ENOMEM;
+	}
 	sync = (struct msm_sync *)(pmsm + 4);
 
 	rc = msm_sync_init(sync, dev, sensor_probe);
 	if (rc < 0) {
+		printk(KERN_ERR "%s: create class failed..\n", __func__);	//request SM
+		class_destroy(msm_class);
 		kfree(pmsm);
 		return rc;
 	}
@@ -4164,6 +4137,8 @@ int msm_camera_drv_start(struct platform_device *dev,
 	CDBG("%s: setting camera node %d\n", __func__, camera_node);
 	rc = msm_device_init(pmsm, sync, camera_node);
 	if (rc < 0) {
+		printk(KERN_ERR "%s: create class failed...\n", __func__);	//request SM
+		class_destroy(msm_class);
 		msm_sync_destroy(sync);
 		kfree(pmsm);
 		return rc;

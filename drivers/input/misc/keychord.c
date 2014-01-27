@@ -25,13 +25,6 @@
 #include <linux/keychord.h>
 #include <linux/sched.h>
 
-// pz1945
-//#define KEYCHORD_DEBUG
-
-#ifdef KEYCHORD_DEBUG
-#include <linux/device.h>
-#endif
-
 #define KEYCHORD_NAME		"keychord"
 #define BUFFER_SIZE			16
 
@@ -74,19 +67,12 @@ static int check_keychord(struct keychord_device *kdev,
 {
 	int i;
 
-#ifdef KEYCHORD_DEBUG
-	printk("%s  keychord->count= %d key_down= %d\n", __func__, keychord->count, kdev->key_down);
-#endif
 	if (keychord->count != kdev->key_down)
 		return 0;
 
 	for (i = 0; i < keychord->count; i++) {
-		if (!test_bit(keychord->keycodes[i], kdev->keystate)){
-#ifdef KEYCHORD_DEBUG
-			printk("keychord->keycodes[i] = %d \n", keychord->keycodes[i]);
-#endif
+		if (!test_bit(keychord->keycodes[i], kdev->keystate))
 			return 0;
-		}
 	}
 
 	/* we have a match */
@@ -101,30 +87,13 @@ static void keychord_event(struct input_handle *handle, unsigned int type,
 	unsigned long flags;
 	int i, got_chord = 0;
 
-#ifdef KEYCHORD_DEBUG
-	printk("%s 1 \n", __func__);
-#endif
-
-//pz1945: fix not detected when pressed VOL_UP and VOL_DOWN together.
-#ifdef CONFIG_PANTECH_PRESTO_BOARD
-	if (type != EV_KEY || code >= KEY_MAX || code == BTN_TOUCH )
-#else
-	if (type != EV_KEY || code >= KEY_MAX )
-#endif
+	if (type != EV_KEY || code >= KEY_MAX)
 		return;
 
-#ifdef KEYCHORD_DEBUG
-	printk("%s 2 code= %d  val= %d \n", __func__, code, value);
-#endif
 	spin_lock_irqsave(&kdev->lock, flags);
 	/* do nothing if key state did not change */
 	if (!test_bit(code, kdev->keystate) == !value)
 		goto done;
-
-
-#ifdef KEYCHORD_DEBUG
-	printk("%s 3 not same  code= %d val= %d \n", __func__, code, value);
-#endif
 	__change_bit(code, kdev->keystate);
 	if (value)
 		kdev->key_down++;
@@ -148,10 +117,6 @@ static void keychord_event(struct input_handle *handle, unsigned int type,
 			kdev->buff[kdev->head] = keychord->id;
 			kdev->head = (kdev->head + 1) % BUFFER_SIZE;
 			got_chord = 1;
-
-#ifdef KEYCHORD_DEBUG
-			printk("%s 3 got_chord \n", __func__);
-#endif
 			break;
 		}
 		/* skip to next keychord */
@@ -174,9 +139,6 @@ static int keychord_connect(struct input_handler *handler,
 	struct keychord_device *kdev =
 		container_of(handler, struct keychord_device, input_handler);
 
-#ifdef KEYCHORD_DEBUG
-	printk("%s 1 \n", __func__);
-#endif
 	/*
 	 * ignore this input device if it does not contain any keycodes
 	 * that we are monitoring
@@ -205,9 +167,8 @@ static int keychord_connect(struct input_handler *handler,
 	if (ret)
 		goto err_input_open_device;
 
-#ifdef KEYCHORD_DEBUG
-	printk("keychord: using input dev %s for fevent\n", dev->name);
-#endif
+	pr_info("keychord: using input dev %s for fevent\n", dev->name);
+
 	return 0;
 
 err_input_open_device:
@@ -219,9 +180,6 @@ err_input_register_handle:
 
 static void keychord_disconnect(struct input_handle *handle)
 {
-#ifdef KEYCHORD_DEBUG
-	printk("%s 1 \n", __func__);
-#endif
 	input_close_device(handle);
 	input_unregister_handle(handle);
 	kfree(handle);
@@ -242,11 +200,6 @@ static ssize_t keychord_read(struct file *file, char __user *buffer,
 		return -EINVAL;
 	count = sizeof(id);
 
-	
-#ifdef KEYCHORD_DEBUG
-	printk("%s 1 \n", __func__);
-#endif
-
 	if (kdev->head == kdev->tail && (file->f_flags & O_NONBLOCK))
 		return -EAGAIN;
 
@@ -255,18 +208,11 @@ static ssize_t keychord_read(struct file *file, char __user *buffer,
 	if (retval)
 		return retval;
 
-#ifdef KEYCHORD_DEBUG
-	printk("%s 2 \n", __func__);
-#endif
 	spin_lock_irqsave(&kdev->lock, flags);
 	/* pop a keychord ID off the queue */
 	id = kdev->buff[kdev->tail];
 	kdev->tail = (kdev->tail + 1) % BUFFER_SIZE;
 	spin_unlock_irqrestore(&kdev->lock, flags);
-
-#ifdef KEYCHORD_DEBUG
-	printk("%s id= %d  3\n", __func__, id);
-#endif
 
 	if (copy_to_user(buffer, &id, count))
 		return -EFAULT;
@@ -286,9 +232,6 @@ static ssize_t keychord_write(struct file *file, const char __user *buffer,
 	int ret, i, key;
 	unsigned long flags;
 
-#ifdef KEYCHORD_DEBUG
-	printk("%s 1\n", __func__);
-#endif
 	if (count < sizeof(struct input_keychord))
 		return -EINVAL;
 	keychords = kzalloc(count, GFP_KERNEL);
@@ -301,9 +244,6 @@ static ssize_t keychord_write(struct file *file, const char __user *buffer,
 		return -EFAULT;
 	}
 
-#ifdef KEYCHORD_DEBUG
-	printk("%s 2 \n", __func__);
-#endif
 	/* unregister handler before changing configuration */
 	if (kdev->registered) {
 		input_unregister_handler(&kdev->input_handler);
@@ -343,10 +283,6 @@ static ssize_t keychord_write(struct file *file, const char __user *buffer,
 				pr_err("keychord: keycode %d out of range\n",
 					key);
 				goto err_unlock_return;
-			} else {
-#ifdef KEYCHORD_DEBUG
-				printk("key %d \n",key);
-#endif			
 			}
 			__set_bit(key, kdev->keybit);
 		}
@@ -380,30 +316,20 @@ static unsigned int keychord_poll(struct file *file, poll_table *wait)
 
 	poll_wait(file, &kdev->waitq, wait);
 
-	if (kdev->head != kdev->tail) {
-#ifdef KEYCHORD_DEBUG
-		printk(" %s poll occurred \n", __func__);
-#endif		
+	if (kdev->head != kdev->tail)
 		return POLLIN | POLLRDNORM;
 
-	}
 	return 0;
 }
 
 static int keychord_open(struct inode *inode, struct file *file)
 {
 	struct keychord_device *kdev;
-	
-#ifdef KEYCHORD_DEBUG
-	printk("%s 1 \n", __func__);
-#endif
+
 	kdev = kzalloc(sizeof(struct keychord_device), GFP_KERNEL);
 	if (!kdev)
 		return -ENOMEM;
 
-#ifdef KEYCHORD_DEBUG
-	printk("%s 2 \n", __func__);
-#endif
 	spin_lock_init(&kdev->lock);
 	init_waitqueue_head(&kdev->waitq);
 
@@ -424,10 +350,7 @@ static int keychord_open(struct inode *inode, struct file *file)
 static int keychord_release(struct inode *inode, struct file *file)
 {
 	struct keychord_device *kdev = file->private_data;
-	
-#ifdef KEYCHORD_DEBUG
-	printk("%s \n", __func__);
-#endif
+
 	if (kdev->registered)
 		input_unregister_handler(&kdev->input_handler);
 	kfree(kdev);

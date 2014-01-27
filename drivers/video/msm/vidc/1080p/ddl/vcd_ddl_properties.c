@@ -430,9 +430,6 @@ static u32 ddl_set_dec_property(struct ddl_client_context *ddl,
 		}
 	}
 	break;
-	case VCD_REQ_PERF_LEVEL:
-		vcd_status = VCD_S_SUCCESS;
-		break;
 	default:
 		vcd_status = VCD_ERR_ILLEGAL_OP;
 		break;
@@ -946,9 +943,6 @@ static u32 ddl_set_enc_property(struct ddl_client_context *ddl,
 		}
 		break;
 	}
-	case VCD_REQ_PERF_LEVEL:
-		vcd_status = VCD_S_SUCCESS;
-		break;
 	default:
 		DDL_MSG_ERROR("INVALID ID %d\n", (int)property_hdr->prop_id);
 		vcd_status = VCD_ERR_ILLEGAL_OP;
@@ -1491,6 +1485,7 @@ static u32 ddl_set_enc_dynamic_property(struct ddl_client_context *ddl,
 			vcd_status = VCD_S_SUCCESS;
 		}
 	}
+	break;
 	case VCD_I_INTRA_REFRESH:
 	{
 		struct vcd_property_intra_refresh_mb_number
@@ -1752,7 +1747,7 @@ u32 ddl_set_default_decoder_buffer_req(struct ddl_decoder_data *decoder,
 		if (!decoder->cont_mode)
 			min_dpb = ddl_decoder_min_num_dpb(decoder);
 		else
-			min_dpb = res_trk_get_min_dpb_count();
+			min_dpb = 5;
 		frame_size = &decoder->client_frame_size;
 		output_buf_req = &decoder->client_output_buf_req;
 		input_buf_req = &decoder->client_input_buf_req;

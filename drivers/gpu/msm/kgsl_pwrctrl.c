@@ -24,7 +24,7 @@
 #define KGSL_PWRFLAGS_AXI_ON   2
 #define KGSL_PWRFLAGS_IRQ_ON   3
 
-#define GPU_SWFI_LATENCY	3
+#define GPU_SWFI_LATENCY       3
 #define UPDATE_BUSY_VAL		1000000
 #define UPDATE_BUSY		50
 
@@ -422,12 +422,8 @@ void kgsl_pwrctrl_pwrrail(struct kgsl_device *device, int state)
 		if (!test_and_set_bit(KGSL_PWRFLAGS_POWER_ON,
 			&pwr->power_flags)) {
 			trace_kgsl_rail(device, state);
-			if (pwr->gpu_reg) {
-				int status = regulator_enable(pwr->gpu_reg);
-				if (status)
-					KGSL_DRV_ERR(device, "regulator_enable "
-							"failed: %d\n", status);
-			}
+			if (pwr->gpu_reg)
+				regulator_enable(pwr->gpu_reg);
 		}
 	}
 }
@@ -514,7 +510,6 @@ int kgsl_pwrctrl_init(struct kgsl_device *device)
 	pwr->nap_allowed = pdata->nap_allowed;
 	pwr->idle_needed = pdata->idle_needed;
 	pwr->interval_timeout = pdata->idle_timeout;
-	pwr->strtstp_sleepwake = pdata->strtstp_sleepwake;
 	pwr->ebi1_clk = clk_get(&pdev->dev, "bus_clk");
 	if (IS_ERR(pwr->ebi1_clk))
 		pwr->ebi1_clk = NULL;
@@ -545,6 +540,7 @@ int kgsl_pwrctrl_init(struct kgsl_device *device)
 		result = -EINVAL;
 		goto done;
 	}
+	pwr->resume_pm_qos = 1;
 
 	register_early_suspend(&device->display_off);
 	return result;
@@ -637,8 +633,7 @@ void kgsl_timer(unsigned long data)
 
 	KGSL_PWR_INFO(device, "idle timer expired device %d\n", device->id);
 	if (device->requested_state != KGSL_STATE_SUSPEND) {
-		if (device->pwrctrl.restore_slumber ||
-					device->pwrctrl.strtstp_sleepwake)
+		if (device->pwrctrl.restore_slumber)
 			kgsl_pwrctrl_request_state(device, KGSL_STATE_SLUMBER);
 		else
 			kgsl_pwrctrl_request_state(device, KGSL_STATE_SLEEP);
@@ -751,7 +746,8 @@ _sleep(struct kgsl_device *device)
 		kgsl_pwrctrl_clk(device, KGSL_PWRFLAGS_OFF, KGSL_STATE_SLEEP);
 		kgsl_pwrctrl_set_state(device, KGSL_STATE_SLEEP);
 		wake_unlock(&device->idle_wakelock);
-		pm_qos_update_request(&device->pm_qos_req_dma,
+		if (device->pwrctrl.resume_pm_qos)
+			pm_qos_update_request(&device->pm_qos_req_dma,
 					PM_QOS_DEFAULT_VALUE);
 		break;
 	case KGSL_STATE_SLEEP:
@@ -779,16 +775,14 @@ _slumber(struct kgsl_device *device)
 	case KGSL_STATE_NAP:
 	case KGSL_STATE_SLEEP:
 		del_timer_sync(&device->idle_timer);
-		if (!device->pwrctrl.strtstp_sleepwake)
-			kgsl_pwrctrl_pwrlevel_change(device,
-					KGSL_PWRLEVEL_NOMINAL);
+		kgsl_pwrctrl_pwrlevel_change(device, KGSL_PWRLEVEL_NOMINAL);
 		device->pwrctrl.restore_slumber = true;
 		device->ftbl->suspend_context(device);
-		device->ftbl->stop(device);
+		device->ftbl->stop(device);		
 		_sleep_accounting(device);
 		kgsl_pwrctrl_set_state(device, KGSL_STATE_SLUMBER);
-		if (device->idle_wakelock.name)
-			wake_unlock(&device->idle_wakelock);
+                if (device->idle_wakelock.name)
+  		    wake_unlock(&device->idle_wakelock);
 		pm_qos_update_request(&device->pm_qos_req_dma,
 						PM_QOS_DEFAULT_VALUE);
 		break;
@@ -859,8 +853,9 @@ void kgsl_pwrctrl_wake(struct kgsl_device *device)
 		/* Re-enable HW access */
 		mod_timer(&device->idle_timer,
 				jiffies + device->pwrctrl.interval_timeout);
+
 		wake_lock(&device->idle_wakelock);
-		if (device->pwrctrl.restore_slumber == false)
+		if (device->pwrctrl.resume_pm_qos)
 			pm_qos_update_request(&device->pm_qos_req_dma,
 						GPU_SWFI_LATENCY);
 	case KGSL_STATE_ACTIVE:

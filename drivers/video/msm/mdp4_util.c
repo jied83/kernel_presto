@@ -418,6 +418,23 @@ irqreturn_t mdp4_isr(int irq, void *ptr)
 			mdp4_primary_vsync_dsi_video();
 #endif
 		spin_unlock(&mdp_spin_lock);
+
+#ifdef CONFIG_FB_MSM_MIPI_DSI_ESD_REFRESH
+		// It make LP-mode between frame-to-frame.
+		// When LCD lost mipi-clock-signal because of ESD, LPmode make LCD to refresh clock.
+		// It is from SMD-recommand.
+		// but, while it is activated, system became slow.
+		if( use_vsyncLPmode )
+		{
+			dsi_lane_ctrl = MIPI_INP(MIPI_DSI_BASE + 0x00A8);
+			MIPI_OUTP(MIPI_DSI_BASE + 0x38, 0x14000000); // lp
+			MIPI_OUTP( MIPI_DSI_BASE + 0x00A8, dsi_lane_ctrl &0x0FFFFFFF );
+			// usleep(3); // spec : under 10us 
+			MIPI_OUTP( MIPI_DSI_BASE + 0x00A8, dsi_lane_ctrl );
+			MIPI_OUTP(MIPI_DSI_BASE + 0x38, 0x10000000); // hs
+		}
+#endif 	
+
 	}
 #ifdef CONFIG_FB_MSM_DTV
 	if (isr & INTR_EXTERNAL_VSYNC) {
@@ -515,14 +532,14 @@ irqreturn_t mdp4_isr(int irq, void *ptr)
 			mdp_intr_mask &= ~INTR_DMA_P_DONE;
 			outp32(MDP_INTR_ENABLE, mdp_intr_mask);
 			dma->waiting = FALSE;
-			mdp4_dma_p_done_dsi_video(dma);
+			mdp4_dma_p_done_dsi_video();
 			spin_unlock(&mdp_spin_lock);
 		} else if (panel & MDP4_PANEL_DSI_CMD) {
 			mdp4_dma_p_done_dsi(dma);
 		}
 #else
 		else { /* MDDI */
-			mdp4_dma_p_done_mddi(dma);
+			mdp4_dma_p_done_mddi();
 			mdp_pipe_ctrl(MDP_DMA2_BLOCK,
 				MDP_BLOCK_POWER_OFF, TRUE);
 			complete(&dma->comp);
@@ -1153,7 +1170,6 @@ static uint32 vg_qseed_table2[] = {
 	0x0fb20fee, 0x0f46031a, 0x0f980ff3, 0x0f4b032a,
 	0x0f800ffa, 0x0f4f0337, 0x0f6d0ffe, 0x0f57033e
 };
-
 
 #define MDP4_QSEED_TABLE0_OFF 0x8100
 #define MDP4_QSEED_TABLE1_OFF 0x8200
@@ -2553,7 +2569,7 @@ u32 mdp4_allocate_writeback_buf(struct msm_fb_data_type *mfd, u32 mix_num)
 {
 	struct mdp_buf_type *buf;
 	ion_phys_addr_t	addr;
-	unsigned long len;
+	u32 len;
 
 	if (mix_num == MDP4_MIXER0)
 		buf = mfd->ov0_wb_buf;
@@ -2569,15 +2585,14 @@ u32 mdp4_allocate_writeback_buf(struct msm_fb_data_type *mfd, u32 mix_num)
 	}
 
 	if (!IS_ERR_OR_NULL(mfd->iclient)) {
-		pr_info("%s:%d ion based allocation mfd->mem_hid 0x%x\n",
-			__func__, __LINE__, mfd->mem_hid);
-		buf->ihdl = ion_alloc(mfd->iclient, buf->size, SZ_4K,
-			mfd->mem_hid);
+		pr_info("%s:%d ion based allocation\n", __func__, __LINE__);
+		buf->ihdl = ion_alloc(mfd->iclient, buf->size, 4,
+			(1 << mfd->mem_hid));
 		if (!IS_ERR_OR_NULL(buf->ihdl)) {
-			if (ion_map_iommu(mfd->iclient, buf->ihdl,
-				DISPLAY_DOMAIN, GEN_POOL, SZ_4K, 0, &addr,
-				&len, 0, 0)) {
-				pr_err("ion_map_iommu() failed\n");
+			if (ion_phys(mfd->iclient, buf->ihdl,
+				&addr, &len)) {
+				pr_err("%s:%d: ion_phys map failed\n",
+					__func__, __LINE__);
 				return -ENOMEM;
 			}
 		} else {
@@ -2612,8 +2627,6 @@ void mdp4_free_writeback_buf(struct msm_fb_data_type *mfd, u32 mix_num)
 
 	if (!IS_ERR_OR_NULL(mfd->iclient)) {
 		if (!IS_ERR_OR_NULL(buf->ihdl)) {
-			ion_unmap_iommu(mfd->iclient, buf->ihdl,
-				DISPLAY_DOMAIN, GEN_POOL);
 			ion_free(mfd->iclient, buf->ihdl);
 			pr_info("%s:%d free writeback imem\n", __func__,
 				__LINE__);
@@ -2858,12 +2871,10 @@ int mdp4_pcc_cfg(struct mdp_pcc_cfg_data *cfg_ptr)
 
 	if (0x8 & cfg_ptr->ops)
 		outpdw(mdp_dma_op_mode,
-			((inpdw(mdp_dma_op_mode) & ~(0x1<<10)) |
-						((0x8 & cfg_ptr->ops)<<10)));
+			(inpdw(mdp_dma_op_mode)|((0x8&cfg_ptr->ops)<<10)));
 
 	outpdw(mdp_cfg_offset,
-			((inpdw(mdp_cfg_offset) & ~(0x1<<29)) |
-						((cfg_ptr->ops & 0x1)<<29)));
+			(inpdw(mdp_cfg_offset)|((cfg_ptr->ops&0x1)<<29)));
 
 	mdp_pipe_ctrl(MDP_CMD_BLOCK, MDP_BLOCK_POWER_OFF, FALSE);
 
@@ -3049,9 +3060,8 @@ int mdp4_argc_cfg(struct mdp_pgc_lut_data *pgc_ptr)
 
 		if (!ret) {
 			mdp_pipe_ctrl(MDP_CMD_BLOCK, MDP_BLOCK_POWER_ON, FALSE);
-			outpdw(pgc_enable_offset, (inpdw(pgc_enable_offset) &
-							~(0x1<<lshift_bits)) |
-				((0x1 & pgc_ptr->flags) << lshift_bits));
+			outpdw(pgc_enable_offset, (inpdw(pgc_enable_offset) |
+				((0x1 & pgc_ptr->flags) << lshift_bits)));
 			mdp_pipe_ctrl(MDP_CMD_BLOCK, MDP_BLOCK_POWER_OFF,
 									FALSE);
 		}

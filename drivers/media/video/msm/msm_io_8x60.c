@@ -24,6 +24,7 @@
 #include <mach/msm_bus.h>
 #include <mach/msm_bus_board.h>
 
+#include <linux/kernel.h>
 
 /* MIPI	CSI	controller registers */
 #define	MIPI_PHY_CONTROL			0x00000000
@@ -92,11 +93,11 @@ static struct clk *camio_vpe_pclk;
 static struct regulator *fs_vfe;
 static struct regulator *fs_ijpeg;
 static struct regulator *fs_vpe;
-#ifndef CONFIG_PANTECH_CAMERA_HW
+#if 0 //samsung (LTE) , not used.[[ 
 static struct regulator *ldo15;
 static struct regulator *lvs0;
 static struct regulator *ldo25;
-#endif
+#endif // ]]
 
 static struct msm_camera_io_ext camio_ext;
 static struct msm_camera_io_clk camio_clk;
@@ -184,7 +185,7 @@ void msm_io_memcpy(void __iomem *dest_addr, void __iomem *src_addr, u32 len)
 
 static void msm_camera_vreg_enable(void)
 {
-#ifndef CONFIG_PANTECH_CAMERA_HW	
+#if 0 //samsung (LTE) , not used.[[ 
 	ldo15 = regulator_get(NULL, "8058_l15");
 	if (IS_ERR(ldo15)) {
 		pr_err("%s: VREG LDO15 get failed\n", __func__);
@@ -215,7 +216,7 @@ static void msm_camera_vreg_enable(void)
 	if (IS_ERR(ldo25)) {
 		pr_err("%s: VREG LDO25 get failed\n", __func__);
 		ldo25 = NULL;
-		goto lvs0_disable;
+		goto ldo25_disable;
 	}
 	if (regulator_set_voltage(ldo25, 1200000, 1200000)) {
 		pr_err("%s: VREG LDO25 set voltage failed\n",  __func__);
@@ -225,7 +226,8 @@ static void msm_camera_vreg_enable(void)
 		pr_err("%s: VREG LDO25 enable failed\n", __func__);
 		goto ldo25_put;
 	}
-#endif
+
+#endif // ]]
 
 	fs_vfe = regulator_get(NULL, "fs_vfe");
 	if (IS_ERR(fs_vfe)) {
@@ -238,7 +240,7 @@ static void msm_camera_vreg_enable(void)
 	}
 	return;
 
-#ifndef CONFIG_PANTECH_CAMERA_HW
+#if 0 //samsung (LTE) , not used.[[ 
 ldo25_disable:
 	regulator_disable(ldo25);
 ldo25_put:
@@ -251,12 +253,12 @@ ldo15_disable:
 	regulator_disable(ldo15);
 ldo15_put:
 	regulator_put(ldo15);
-#endif	
+#endif//]]	
 }
 
 static void msm_camera_vreg_disable(void)
 {
-#ifndef CONFIG_PANTECH_CAMERA_HW	
+#if 0 //samsung (LTE) , not used.[[ 
 	if (ldo15) {
 		regulator_disable(ldo15);
 		regulator_put(ldo15);
@@ -271,11 +273,13 @@ static void msm_camera_vreg_disable(void)
 		regulator_disable(ldo25);
 		regulator_put(ldo25);
 	}
-#endif
+#endif //]]
+	//dump_stack();
 
 	if (fs_vfe) {
 		regulator_disable(fs_vfe);
 		regulator_put(fs_vfe);
+		fs_vfe = NULL;
 	}
 }
 
@@ -474,6 +478,11 @@ static irqreturn_t msm_io_csi_irq(int irq_num, void *data)
 	CDBG("%s MIPI_INTERRUPT_STATUS = 0x%x\n", __func__, irq);
 	if (csibase != NULL)
 		msm_io_w(irq, csibase + MIPI_INTERRUPT_STATUS);
+#if 0 //=> Add from 
+		//bits 23:8 indicate word count 
+		irq = msm_io_r(csibase + 0x00000010); 
+		CDBG("%s MIPI_PROTOCOL_STATUS = 0x%x\n", __func__, irq); 
+#endif //=> Adde to 
 	return IRQ_HANDLED;
 }
 
@@ -641,10 +650,8 @@ static void msm_camio_csi_disable(void)
 		CDBG("%s MIPI_PHY_D0_CONTROL2 val=0x%x\n", __func__, val);
 		msm_io_w(val, csibase + MIPI_PHY_D0_CONTROL2);
 		msm_io_w(val, csibase + MIPI_PHY_D1_CONTROL2);
-#if 0 //pz2428 : disable unused mipi line
 		msm_io_w(val, csibase + MIPI_PHY_D2_CONTROL2);
 		msm_io_w(val, csibase + MIPI_PHY_D3_CONTROL2);
-#endif
 		CDBG("%s MIPI_PHY_CL_CONTROL val=0x%x\n", __func__, val);
 		msm_io_w(val, csibase + MIPI_PHY_CL_CONTROL);
 		msleep(20);
@@ -681,30 +688,134 @@ void msm_camio_disable(struct platform_device *pdev)
 
 int msm_camio_sensor_clk_on(struct platform_device *pdev)
 {
-	int rc = 0;
 	struct msm_camera_sensor_info *sinfo = pdev->dev.platform_data;
 	struct msm_camera_device_platform_data *camdev = sinfo->pdata;
+	unsigned int mclk_cfg;
+	int rc = 0;
+	
+	pr_info("%s\n", __func__);
+
 	camio_dev = pdev;
 	camio_ext = camdev->ioext;
 	camio_clk = camdev->ioclk;
+
+	// Disable MCLK 
+	mclk_cfg = GPIO_CFG(32, 0, GPIO_CFG_OUTPUT, GPIO_CFG_PULL_UP, GPIO_CFG_2MA);
+	gpio_tlmm_config(mclk_cfg, GPIO_CFG_ENABLE);
 
 	msm_camera_vreg_enable();
 	msleep(10);
 	rc = camdev->camera_gpio_on();
 	if (rc < 0)
 		return rc;
+#if defined (CONFIG_SENSOR_M5MO)
+	// ldo on
+	sinfo->sensor_platform_info->sensor_power_control(1); //on
+
+	//  MCLK
+	rc = msm_camio_clk_enable(CAMIO_CAM_MCLK_CLK);  //MCLK ON
+	
+	mclk_cfg = GPIO_CFG(32, 1, GPIO_CFG_OUTPUT, GPIO_CFG_PULL_UP, GPIO_CFG_2MA);
+	gpio_tlmm_config(mclk_cfg, GPIO_CFG_ENABLE);	
+
+#if defined (CONFIG_SENSOR_SR200PC20M)
+	msleep(30); // min 30ms
+#else
+	msleep(3); // min 350ns
+#endif
+
+	// reset high 
+	if (sinfo->sensor_platform_info->sensor_reset) {
+		gpio_set_value_cansleep(sinfo->sensor_platform_info->sensor_reset, 1);
+		msleep(5);
+	}
+	return rc;
+
+#else
 	return msm_camio_clk_enable(CAMIO_CAM_MCLK_CLK);
+#endif
 }
 
 int msm_camio_sensor_clk_off(struct platform_device *pdev)
 {
 	struct msm_camera_sensor_info *sinfo = pdev->dev.platform_data;
 	struct msm_camera_device_platform_data *camdev = sinfo->pdata;
+	unsigned int mclk_cfg;
+	int rc = 0;
+
+	pr_info("%s\n", __func__);
+
+#if defined (CONFIG_SENSOR_M5MO)
+	//reset low
+	if (sinfo->sensor_platform_info->sensor_reset) {
+		gpio_set_value_cansleep(sinfo->sensor_platform_info->sensor_reset, 0);
+	}
+	msleep(3);
+
+	// Disable MCLK 
+	mclk_cfg = GPIO_CFG(32, 0, GPIO_CFG_OUTPUT, GPIO_CFG_PULL_UP, GPIO_CFG_2MA);
+	gpio_tlmm_config(mclk_cfg, GPIO_CFG_ENABLE);	
+
+	// ldo off
+	sinfo->sensor_platform_info->sensor_power_control(0);
+	
+	msm_camera_vreg_disable();
+	camdev->camera_gpio_off();
+	rc = msm_camio_clk_disable(CAMIO_CAM_MCLK_CLK);
+	return rc;
+
+#else
+	// Disable MCLK 
+	mclk_cfg = GPIO_CFG(32, 0, GPIO_CFG_OUTPUT, GPIO_CFG_PULL_UP, GPIO_CFG_2MA);
+	gpio_tlmm_config(mclk_cfg, GPIO_CFG_ENABLE);	
 	msm_camera_vreg_disable();
 	camdev->camera_gpio_off();
 	return msm_camio_clk_disable(CAMIO_CAM_MCLK_CLK);
+#endif
 
 }
+
+
+// samsung
+void msm_camio_sensor_reset(struct msm_camera_sensor_info *sinfo)
+{
+	unsigned int mclk_cfg;
+	
+	pr_info("%s\n", __func__);
+//power off
+	//reset low
+	if (sinfo->sensor_platform_info->sensor_reset) {
+		gpio_set_value_cansleep(sinfo->sensor_platform_info->sensor_reset, 0);
+		msleep(3);
+	}
+
+	// Disable MCLK 
+	mclk_cfg = GPIO_CFG(32, 0, GPIO_CFG_OUTPUT, GPIO_CFG_PULL_UP, GPIO_CFG_2MA);
+	gpio_tlmm_config(mclk_cfg, GPIO_CFG_ENABLE);
+	msleep(1);
+
+	// ldo off
+	sinfo->sensor_platform_info->sensor_power_control(0);
+	msleep(3);
+	
+//power on
+	//ldo on
+	sinfo->sensor_platform_info->sensor_power_control(1); //on
+	msleep(1);
+	
+	//mclk on
+	mclk_cfg = GPIO_CFG(32, 1, GPIO_CFG_OUTPUT, GPIO_CFG_PULL_UP, GPIO_CFG_2MA);
+	gpio_tlmm_config(mclk_cfg, GPIO_CFG_ENABLE);	
+	msleep(3); // min 30ms
+
+	// reset high 
+	if (sinfo->sensor_platform_info->sensor_reset) {
+		gpio_set_value_cansleep(sinfo->sensor_platform_info->sensor_reset, 1);
+		msleep(5);
+	}
+
+}
+
 
 void msm_camio_vfe_blk_reset(void)
 {
@@ -740,9 +851,7 @@ int msm_camio_csi_config(struct msm_camera_csi_params *csi_params)
 {
 	int rc = 0;
 	uint32_t val = 0;
-#if 0 //pz2428 : disable unused mipi line
 	int i;
-#endif
 
 	CDBG("msm_camio_csi_config\n");
 	if (csibase != NULL) {
@@ -772,13 +881,9 @@ int msm_camio_csi_config(struct msm_camera_csi_params *csi_params)
 			(0x1 << MIPI_PHY_D0_CONTROL2_LP_REC_EN_SHFT) |
 			(0x1 << MIPI_PHY_D0_CONTROL2_ERR_SOT_HS_EN_SHFT);
 		CDBG("%s MIPI_PHY_D0_CONTROL2 val=0x%x\n", __func__, val);
-#if 0 //pz2428 : disable unused mipi line
 		for (i = 0; i < csi_params->lane_cnt; i++)
 			msm_io_w(val, csibase + MIPI_PHY_D0_CONTROL2 + i * 4);
-#else
-        	msm_io_w(val, csibase + MIPI_PHY_D0_CONTROL2);
-        	msm_io_w(val, csibase + MIPI_PHY_D1_CONTROL2);
-#endif
+
 		val = (0x0F << MIPI_PHY_CL_CONTROL_HS_TERM_IMP_SHFT) |
 			(0x1 << MIPI_PHY_CL_CONTROL_LP_REC_EN_SHFT);
 		CDBG("%s MIPI_PHY_CL_CONTROL val=0x%x\n", __func__, val);
@@ -910,6 +1015,7 @@ int msm_cam_core_reset(void)
 {
 	struct clk *clk1;
 	int rc = 0;
+	pr_info("%s\n", __func__);
 	clk1 = clk_get(&camio_dev->dev, "csi_vfe_clk");
 	if (IS_ERR(clk1)) {
 		pr_err("%s: did not get csi_vfe_clk\n", __func__);

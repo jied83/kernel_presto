@@ -114,7 +114,6 @@ static struct adreno_device device_3d0 = {
 	.pfp_fw = NULL,
 	.pm4_fw = NULL,
 	.wait_timeout = 10000, /* in milliseconds */
-	.ib_check_level = 0,
 };
 
 
@@ -981,7 +980,7 @@ static int adreno_suspend_context(struct kgsl_device *device)
 	return status;
 }
 
-struct kgsl_memdesc *adreno_find_region(struct kgsl_device *device,
+const struct kgsl_memdesc *adreno_find_region(struct kgsl_device *device,
 						unsigned int pt_base,
 						unsigned int gpuaddr,
 						unsigned int size)
@@ -1052,7 +1051,7 @@ struct kgsl_memdesc *adreno_find_region(struct kgsl_device *device,
 uint8_t *adreno_convertaddr(struct kgsl_device *device, unsigned int pt_base,
 			    unsigned int gpuaddr, unsigned int size)
 {
-	struct kgsl_memdesc *memdesc;
+	const struct kgsl_memdesc *memdesc;
 
 	memdesc = adreno_find_region(device, pt_base, gpuaddr, size);
 
