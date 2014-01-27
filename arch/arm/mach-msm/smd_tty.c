@@ -83,8 +83,6 @@ static struct smd_config smd_configs[] = {
 	{2, "APPS_RIVA_BT_ACL", NULL, SMD_APPS_WCNSS},
 	{3, "APPS_RIVA_BT_CMD", NULL, SMD_APPS_WCNSS},
 	{4, "MBALBRIDGE", NULL, SMD_APPS_MODEM},
-	{5, "APPS_RIVA_ANT_CMD", NULL, SMD_APPS_WCNSS},
-	{6, "APPS_RIVA_ANT_DATA", NULL, SMD_APPS_WCNSS},
 	{7, "DATA1", NULL, SMD_APPS_MODEM},
 	{11, "DATA11", NULL, SMD_APPS_MODEM},
 	{21, "DATA21", NULL, SMD_APPS_MODEM},
@@ -559,6 +557,8 @@ static int __init smd_tty_init(void)
 			 */
 			legacy_ds |= cpu_is_msm8x60() &&
 					(socinfo_get_platform_subtype() == 0x0);
+//			legacy_ds |= cpu_is_msm8x60() && (socinfo_get_platform_subtype() == 0x1);
+//			legacy_ds |= cpu_is_msm8x60();
 
 			if (!legacy_ds)
 				continue;

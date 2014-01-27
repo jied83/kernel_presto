@@ -358,8 +358,7 @@ struct msm_mapped_buffer *msm_subsystem_map_buffer(unsigned long phys,
 					temp_phys += SZ_4K,
 					temp_va += SZ_4K) {
 				ret = iommu_map(d, temp_va, temp_phys,
-						get_order(SZ_4K),
-						(IOMMU_READ | IOMMU_WRITE));
+						 get_order(SZ_4K), 0);
 				if (ret) {
 					pr_err("%s: could not map iommu for"
 						" domain %p, iova %lx,"
